@@ -1,0 +1,16 @@
+[project]
+name = "gpx-toolkit"
+version = "0.1.0"
+description = "Repair and merge consumer-GPS tracks for video telemetry overlays"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+gpxtool = "gpxtool.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
