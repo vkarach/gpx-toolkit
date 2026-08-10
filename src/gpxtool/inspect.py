@@ -13,13 +13,36 @@ class Anomaly:
     detail: str
 
 
-def scan(path: str, accel_limit: float = 3.0) -> list[list[Anomaly]]:
-    """Report duplicate timestamps, dropouts and impossible speed steps per segment."""
+def held_positions(points: list, min_s: float) -> list[Anomaly]:
+    """Runs where the coordinate never moved, which read as a stop even if the rider did not.
+
+    Elevation is reported alongside: a fix held under tree cover keeps drifting
+    downhill on the barometer, a rider waiting at a gate does not.
+    """
+    issues: list[Anomaly] = []
+    index = 0
+    while index < len(points):
+        last = index
+        while last + 1 < len(points) and point_latlon(points[last + 1]) == point_latlon(points[index]):
+            last += 1
+        span = (point_time(points[last]) - point_time(points[index])).total_seconds()
+        if span >= min_s:
+            climb = point_float(points[last], "ele") - point_float(points[index], "ele")
+            issues.append(Anomaly(
+                "held", point_time(points[index]).strftime("%H:%M:%S"),
+                f"{span:.0f}s on one coordinate, elevation {climb:+.1f} m",
+            ))
+        index = last + 1
+    return issues
+
+
+def scan(path: str, accel_limit: float = 3.0, held_min_s: float = 5.0) -> list[list[Anomaly]]:
+    """Report duplicate timestamps, dropouts, held fixes and impossible speed steps."""
     _, segments = read_segments(path)
     findings = []
 
     for points in segments:
-        issues: list[Anomaly] = []
+        issues: list[Anomaly] = held_positions(points, held_min_s)
         for previous, current in zip(points, points[1:]):
             start, end = point_time(previous), point_time(current)
             step = (end - start).total_seconds()
@@ -38,7 +61,7 @@ def scan(path: str, accel_limit: float = 3.0) -> list[list[Anomaly]]:
                     f"{change / step:+.1f} m/s2 ({point_float(previous, 'speed') * 3.6:.0f} -> "
                     f"{point_float(current, 'speed') * 3.6:.0f} km/h)",
                 ))
-        findings.append(issues)
+        findings.append(sorted(issues, key=lambda issue: issue.at))
     return findings
 
 

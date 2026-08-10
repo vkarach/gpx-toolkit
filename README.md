@@ -196,8 +196,14 @@ percentage means the clocks or the time ranges do not line up.
 
 ### scan
 
-Lists duplicates, dropouts and physically impossible speed steps. Useful before
-and after a repair to see what changed.
+Lists duplicates, dropouts, held fixes and physically impossible speed steps.
+Useful before and after a repair to see what changed.
+
+A held fix is a run where the coordinate never moved for at least
+`--held-min-s`, reported with the elevation change across it. That tells a real
+stop from a lost one: a receiver holding its last position under tree cover
+keeps sinking on the barometer while a rider waiting at a gate does not, and
+either way the gauge reads 0 there because the recording says so.
 
 ### compare
 

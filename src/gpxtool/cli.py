@@ -137,10 +137,12 @@ def cmd_merge(args: argparse.Namespace) -> None:
 
 
 def cmd_scan(args: argparse.Namespace) -> None:
-    for index, issues in enumerate(scan(args.input, args.accel_limit)):
-        print(f"seg {index}: {len(issues)} anomalies")
-        for issue in issues:
-            print(f"  {issue.at}  {issue.kind:<11} {issue.detail}")
+    for path in gpx_inputs(args.inputs):
+        print(path)
+        for index, issues in enumerate(scan(path, args.accel_limit, args.held_min_s)):
+            print(f"  seg {index}: {len(issues)} anomalies")
+            for issue in issues:
+                print(f"    {issue.at}  {issue.kind:<11} {issue.detail}")
 
 
 def cmd_compare(args: argparse.Namespace) -> None:
@@ -237,8 +239,10 @@ def build_parser() -> argparse.ArgumentParser:
     temp.set_defaults(func=cmd_temp)
 
     check = sub.add_parser("scan", help="list duplicates, dropouts and impossible speed steps")
-    check.add_argument("input")
+    check.add_argument("inputs", nargs="+", help="GPX files or directories holding them")
     check.add_argument("--accel-limit", type=float, default=3.0)
+    check.add_argument("--held-min-s", type=float, default=5.0,
+                       help="report a coordinate that never moved for this long")
     check.set_defaults(func=cmd_scan)
 
     compare = sub.add_parser("compare", help="recorded speed tag against speed from coordinates")
