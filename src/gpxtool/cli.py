@@ -12,6 +12,7 @@ from .pipeline import merge_files
 from .validate import WARNING, grouped
 from .clip import clip
 from .video import STAMPS, human_offset, parse_timezone, sync
+from .weather import add_temperature
 
 
 def _config_from_args(args: argparse.Namespace) -> RepairConfig:
@@ -107,6 +108,19 @@ def cmd_clip(args: argparse.Namespace) -> None:
     print(f"  {cut.kept} pts over {cut.span_s:.0f}s in {cut.segments} segment(s), "
           f"{cut.dropped} dropped")
     print(f"  starts {cut.lead_in_s:+.0f}s from the video, ends {cut.lead_out_s:+.0f}s before its end")
+
+
+def cmd_temp(args: argparse.Namespace) -> None:
+    inputs = gpx_inputs([args.input])
+    refuse_in_place(inputs, args.output)
+    report = add_temperature(inputs[0], args.output)
+    source = "cache" if report.from_cache else "Open-Meteo archive"
+    print(args.output)
+    print(f"  {report.latitude:.2f}, {report.longitude:.2f} on {', '.join(report.days)} "
+          f"from {source}")
+    print(f"  atemp: {report.tagged}/{report.points} points "
+          f"({100 * report.tagged / report.points if report.points else 0:.0f}%), "
+          f"{len(report.samples)} hourly samples interpolated")
 
 
 def cmd_merge(args: argparse.Namespace) -> None:
@@ -216,6 +230,11 @@ def build_parser() -> argparse.ArgumentParser:
     cut.add_argument("--pad-s", type=float, default=0.0,
                      help="seconds of track to keep either side of the video")
     cut.set_defaults(func=cmd_clip)
+
+    temp = sub.add_parser("temp", help="add ambient temperature from the Open-Meteo archive")
+    temp.add_argument("input")
+    temp.add_argument("-o", "--output", required=True)
+    temp.set_defaults(func=cmd_temp)
 
     check = sub.add_parser("scan", help="list duplicates, dropouts and impossible speed steps")
     check.add_argument("input")

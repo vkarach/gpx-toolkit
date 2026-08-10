@@ -22,6 +22,7 @@ hole where the overlay shows 0.
 
 ```
 python -m gpxtool normalize watch_export.gpx -o ride.gpx
+python -m gpxtool temp ride.gpx -o ride_with_temp.gpx
 python -m gpxtool sync ride.gpx DJI_0042.MP4 --camera-tz +02:00
 python -m gpxtool clip ride.gpx DJI_0042.MP4 -o ride_clip.gpx --camera-tz +02:00
 python -m gpxtool merge ride_1.gpx ride_2.gpx -o ride_merged.gpx
@@ -118,6 +119,22 @@ python -m gpxtool clip ride.gpx DJI_0042.MP4 -o ride_clip.gpx --camera-tz UTC
 The window is resolved exactly as `sync` resolves it, `--pad-s` keeps a margin
 either side, and timestamps stay as recorded so a later `enrich` still matches.
 
+### temp
+
+The watch has no thermometer, so ambient temperature can only be borrowed:
+
+```
+python -m gpxtool temp ride.gpx -o ride_with_temp.gpx
+```
+
+Historical weather comes from the Open-Meteo archive API (free, no key) for the
+first trackpoint's coordinates and the ride's date, written as `gpxtpx:atemp`
+next to `gpxtpx:hr`. The archive is hourly on a coarse grid, so values are
+interpolated between hours and are an approximation, not a measurement.
+Responses are cached on disk under `%LOCALAPPDATA%\gpx-toolkit\weather` (or
+`~/.cache/gpx-toolkit/weather`, or `$GPXTOOL_CACHE`) keyed by rounded
+coordinates and date, so iterating does not refetch.
+
 ### merge
 
 Each input segment is repaired, then segments are stitched end to end so the
@@ -208,6 +225,7 @@ src/gpxtool/
   enrich.py    borrow sensor channels from a donor recording
   video.py     MP4 creation time, duration, and the window that fits the track
   clip.py      cut a track down to a video's window
+  weather.py   ambient temperature from the Open-Meteo archive
   inspect.py   diagnostics
   cli.py       command line
 ```
