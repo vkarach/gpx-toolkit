@@ -10,6 +10,8 @@ from .inspect import scan, tag_vs_distance
 from .normalize import MISSING_HR_MODES, normalize_file
 from .pipeline import merge_files
 from .validate import WARNING, grouped
+from .clip import clip
+from .video import STAMPS, human_offset, parse_timezone, sync
 
 
 def _config_from_args(args: argparse.Namespace) -> RepairConfig:
@@ -76,6 +78,35 @@ def cmd_normalize(args: argparse.Namespace) -> None:
         for issue, count in grouped(report.issues):
             if issue.level == WARNING:
                 print(f"  warning: {issue.message} ({count}x, first at {issue.where})")
+
+
+def _print_sync(report) -> None:
+    print(f"video {report.duration_s:.1f}s, track {report.track_duration_s:.0f}s from "
+          f"{report.track_start:%Y-%m-%d %H:%M:%S} UTC")
+    for fit in report.candidates:
+        mark = "->" if fit is report.chosen else "  "
+        print(f"  {mark} mvhd as {fit.stamp:<5} {fit.start:%H:%M:%S} - {fit.end:%H:%M:%S} UTC: "
+              f"{fit.distance_m:.0f} m travelled, {fit.average_kmh:.1f} km/h, "
+              f"{fit.ascent_m:.0f} m climbed, {fit.coverage:.0%} covered")
+    print(f"offset {report.offset_s:+.1f}s ({human_offset(report.offset_s)})")
+    for warning in report.warnings:
+        print(f"WARNING: {warning}")
+
+
+def cmd_sync(args: argparse.Namespace) -> None:
+    _print_sync(sync(args.track, args.video, parse_timezone(args.camera_tz), args.stamp))
+
+
+def cmd_clip(args: argparse.Namespace) -> None:
+    refuse_in_place([args.track], args.output)
+    report = sync(args.track, args.video, parse_timezone(args.camera_tz), args.stamp)
+    _print_sync(report)
+
+    cut = clip(args.track, args.output, report.chosen.start, report.chosen.end, args.pad_s)
+    print(args.output)
+    print(f"  {cut.kept} pts over {cut.span_s:.0f}s in {cut.segments} segment(s), "
+          f"{cut.dropped} dropped")
+    print(f"  starts {cut.lead_in_s:+.0f}s from the video, ends {cut.lead_out_s:+.0f}s before its end")
 
 
 def cmd_merge(args: argparse.Namespace) -> None:
@@ -164,6 +195,27 @@ def build_parser() -> argparse.ArgumentParser:
                      help="points averaged either side of each elevation sample")
     fix.add_argument("--no-speed", action="store_true", help="do not derive <speed>")
     fix.set_defaults(func=cmd_normalize)
+
+    pair = sub.add_parser("sync", help="offset between a video and a track, for the overlay tool")
+    pair.add_argument("track")
+    pair.add_argument("video")
+    pair.add_argument("--camera-tz", required=True,
+                      help="timezone the camera clock was set to, e.g. +02:00 or Europe/Bratislava")
+    pair.add_argument("--stamp", choices=STAMPS, default="auto",
+                      help="whether mvhd marks the start or the end of the recording")
+    pair.set_defaults(func=cmd_sync)
+
+    cut = sub.add_parser("clip", help="cut a track down to the stretch a video covers")
+    cut.add_argument("track")
+    cut.add_argument("video")
+    cut.add_argument("-o", "--output", required=True)
+    cut.add_argument("--camera-tz", required=True,
+                     help="timezone the camera clock was set to, e.g. +02:00 or Europe/Bratislava")
+    cut.add_argument("--stamp", choices=STAMPS, default="auto",
+                     help="whether mvhd marks the start or the end of the recording")
+    cut.add_argument("--pad-s", type=float, default=0.0,
+                     help="seconds of track to keep either side of the video")
+    cut.set_defaults(func=cmd_clip)
 
     check = sub.add_parser("scan", help="list duplicates, dropouts and impossible speed steps")
     check.add_argument("input")

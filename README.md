@@ -22,6 +22,8 @@ hole where the overlay shows 0.
 
 ```
 python -m gpxtool normalize watch_export.gpx -o ride.gpx
+python -m gpxtool sync ride.gpx DJI_0042.MP4 --camera-tz +02:00
+python -m gpxtool clip ride.gpx DJI_0042.MP4 -o ride_clip.gpx --camera-tz +02:00
 python -m gpxtool merge ride_1.gpx ride_2.gpx -o ride_merged.gpx
 python -m gpxtool enrich ride_merged.gpx watch.gpx -o ride_final.gpx
 python -m gpxtool scan ride_2.gpx
@@ -69,6 +71,52 @@ Speed is therefore measured over a centred window,
 window shrinks symmetrically instead of leaving the speed undefined. Distance is
 haversine; elevation is left out of the horizontal speed, and can be smoothed
 first with `--elevation-smooth` when a gradient readout flickers.
+
+### sync
+
+The camera has no GPS, so the video is placed by clock offset. The GPX is never
+trimmed - trimming only adds another place to be a few seconds out.
+
+```
+python -m gpxtool sync ride.gpx DJI_0042.MP4 --camera-tz +02:00
+```
+
+```
+video start 2026-07-30 14:35:00 UTC
+track start 2026-07-30 14:28:55 UTC, 3628s long
+offset +365.0s (+0:06:05.0)
+```
+
+The video's start comes from the MP4 `mvhd` creation time. Cameras write that as
+local time with no offset attached while the GPX is UTC, so the camera's
+timezone is a required parameter - a fixed offset like `+02:00` or an IANA name
+- and is never guessed from the host machine. An offset that is negative or
+longer than the track warns loudly: that means clock drift, the wrong timezone,
+or the wrong pair of files.
+
+The spec calls that stamp the moment the movie was created, but plenty of phones
+write it when the file is closed, which puts the video a whole duration away
+from where it belongs. Both readings are therefore measured against the track -
+how far it travelled, how much it climbed, how much of the window it covers -
+and the better fit is chosen, with `--stamp start|end` to force one. The output
+shows both, so a bad fit is visible rather than silent:
+
+```
+     mvhd as start 14:19:44 - 14:28:24 UTC: 777 m travelled, 5.4 km/h, 19 m climbed, 100% covered
+  -> mvhd as end   14:11:03 - 14:19:44 UTC: 1285 m travelled, 8.9 km/h, 12 m climbed, 100% covered
+```
+
+### clip
+
+When the overlay wants a track exactly as long as the video rather than an
+offset into an hours-long ride:
+
+```
+python -m gpxtool clip ride.gpx DJI_0042.MP4 -o ride_clip.gpx --camera-tz UTC
+```
+
+The window is resolved exactly as `sync` resolves it, `--pad-s` keeps a margin
+either side, and timestamps stay as recorded so a later `enrich` still matches.
 
 ### merge
 
@@ -158,6 +206,8 @@ src/gpxtool/
   validate.py  GPX 1.1 content model check, no schema library needed
   align.py     find where two recordings overlap by trajectory
   enrich.py    borrow sensor channels from a donor recording
+  video.py     MP4 creation time, duration, and the window that fits the track
+  clip.py      cut a track down to a video's window
   inspect.py   diagnostics
   cli.py       command line
 ```
