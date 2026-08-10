@@ -73,7 +73,7 @@ def fill_gaps(points: Points, config: RepairConfig) -> tuple[Points, int]:
     return filled, added
 
 
-def _moving_average(values: list[float], half_width: int) -> list[float]:
+def moving_average(values: list[float], half_width: int) -> list[float]:
     if half_width <= 0:
         return values
     smoothed = []
@@ -85,30 +85,45 @@ def _moving_average(values: list[float], half_width: int) -> list[float]:
     return smoothed
 
 
-def recompute_speed(points: Points, config: RepairConfig) -> None:
-    """Derive speed from travelled distance instead of trusting the <speed> tag."""
+def derive_speed(points: Points, window_s: float) -> list[float]:
+    """Speed over a centred window, so a held position no longer reads as a stop.
+
+    A receiver that repeats the previous coordinate makes adjacent-pair
+    differencing alternate between 0 and a spike. The window is shrunk
+    symmetrically near the ends of the track rather than left undefined.
+    """
     seconds = _elapsed(points)
     coords = [point_latlon(p) for p in points]
-
-    cumulative = [0.0]
-    for index in range(1, len(points)):
-        lat0, lon0 = coords[index - 1]
-        lat1, lon1 = coords[index]
-        cumulative.append(cumulative[-1] + haversine(lat0, lon0, lat1, lon1))
-
+    last = len(points) - 1
+    half = window_s / 2
     speeds = []
-    for index in range(len(points)):
-        low = high = index
-        while seconds[high] - seconds[low] < config.speed_window_s and (low > 0 or high < len(points) - 1):
-            if low > 0:
-                low -= 1
-            if high < len(points) - 1 and seconds[high] - seconds[low] < config.speed_window_s:
-                high += 1
-        span = seconds[high] - seconds[low]
-        speeds.append((cumulative[high] - cumulative[low]) / span if span > 0 else 0.0)
 
-    speeds = _moving_average(speeds, config.speed_smooth)
-    elevations = _moving_average([point_float(p, "ele") for p in points], config.elevation_smooth)
+    for index in range(len(points)):
+        low, high = index, index
+        while low > 0 and seconds[index] - seconds[low - 1] <= half:
+            low -= 1
+        while high < last and seconds[high + 1] - seconds[index] <= half:
+            high += 1
+
+        reach = min(index - low, high - index)
+        low, high = index - reach, index + reach
+        if low == high:
+            low, high = (index, index + 1) if index < last else (index - 1, index)
+        if low < 0 or high > last:
+            speeds.append(0.0)
+            continue
+
+        span = seconds[high] - seconds[low]
+        distance = haversine(*coords[low], *coords[high])
+        speeds.append(distance / span if span > 0 else 0.0)
+
+    return speeds
+
+
+def recompute_speed(points: Points, config: RepairConfig) -> None:
+    """Derive speed from travelled distance instead of trusting the <speed> tag."""
+    speeds = moving_average(derive_speed(points, config.speed_window_s), config.speed_smooth)
+    elevations = moving_average([point_float(p, "ele") for p in points], config.elevation_smooth)
 
     for point, speed, elevation in zip(points, speeds, elevations):
         set_point_float(point, "speed", speed)

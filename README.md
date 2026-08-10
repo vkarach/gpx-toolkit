@@ -1,13 +1,14 @@
 # gpx-toolkit
 
-Repairs consumer-GPS tracks (phone dashcams, action cams) so they drive a clean
-telemetry overlay, and merges several recordings into one continuous track.
+Repairs consumer-GPS tracks (watches, phone dashcams, action cams) so they drive
+a clean telemetry overlay, merges several recordings into one continuous track,
+and lines a video up with the track that belongs to it.
 
 No third-party dependencies. Python 3.10+.
 
 ## Why
 
-Phone recorders produce tracks that look wrong on a speed gauge:
+Watch and phone recorders produce tracks that look wrong on a speed gauge:
 
 - several fixes stamped with the same second, so the gauge jumps instantly
 - dropouts of a few seconds where the receiver writes nothing
@@ -20,6 +21,7 @@ hole where the overlay shows 0.
 ## Usage
 
 ```
+python -m gpxtool normalize watch_export.gpx -o ride.gpx
 python -m gpxtool merge ride_1.gpx ride_2.gpx -o ride_merged.gpx
 python -m gpxtool enrich ride_merged.gpx watch.gpx -o ride_final.gpx
 python -m gpxtool scan ride_2.gpx
@@ -28,6 +30,45 @@ python -m gpxtool compare ride_2.gpx --start 15:08:45 --end 15:09:05
 
 Run from the repo root with `PYTHONPATH=src`, or `pip install -e .` to get the
 `gpxtool` command.
+
+Every command reads its inputs and writes a new file; it refuses to overwrite an
+input. `normalize` and `scan` also accept directories and process every `.gpx`
+inside, with `--out-dir` instead of `-o` for a batch.
+
+### normalize
+
+Prepares a Samsung Health export (Galaxy Watch) for an overlay tool, fixing what
+the exporter gets wrong:
+
+- `<metadate>` rewritten as `<metadata><time>`, which is what GPX 1.1 defines
+- `<exerciseinfo>` kept, but moved under `<extensions>` where it validates
+- points with no `gpxtpx:hr`: `--missing-hr fill` forward-fills the last reading
+  (default), `drop` cuts a tail that has none, `keep` leaves them empty
+- a pause longer than `--gap-split-s` (default 10 s) ends the `<trkseg>`, so
+  nothing downstream interpolates across it
+- `<speed>` derived per point, see below
+
+The result is checked against the GPX 1.1 content model before anything is
+written, and nothing is written if it would be invalid. `<speed>` is reported as
+a warning rather than an error: it is GPX 1.0 vocabulary that overlay tools read
+anyway, and dropping it would leave the gauge with nothing to show.
+
+The run prints a summary per file: point count, duration, sampling rate, share
+of held positions, points without heart rate, and every gap detected.
+
+### Derived speed
+
+Samsung stores no instantaneous speed, and adjacent-pair differencing produces a
+sawtooth: a receiver at a traffic light or under a weak fix repeats the previous
+coordinate, giving 0 m/s followed by a spike. In a reference 1 hour ride, 42% of
+points repeat their predecessor.
+
+Speed is therefore measured over a centred window,
+`v[i] = distance(p[i - n/2], p[i + n/2]) / (t[i + n/2] - t[i - n/2])`, with
+`--speed-window-s` (default 5, sane range 3-7). Near the ends of a track the
+window shrinks symmetrically instead of leaving the speed undefined. Distance is
+haversine; elevation is left out of the horizontal speed, and can be smoothed
+first with `--elevation-smooth` when a gradient readout flickers.
 
 ### merge
 
@@ -101,8 +142,8 @@ Where the two disagree, the tag is usually the one lying.
 ## Tuning
 
 Every field of `RepairConfig` is exposed as a `merge` flag, for example
-`--speed-window-s 3.0` or `--accel-max 2.0`. Defaults are documented in
-`src/gpxtool/config.py`.
+`--speed-window-s 3.0` or `--accel-max 2.0`, and `NormalizeConfig` as a
+`normalize` flag. Defaults are documented in `src/gpxtool/config.py`.
 
 ## Layout
 
@@ -111,8 +152,10 @@ src/gpxtool/
   gpxio.py     parsing, serialisation, point accessors
   geo.py       haversine distance
   config.py    tunables
-  repair.py    per-segment repairs
+  repair.py    per-segment repairs and derived speed
   pipeline.py  merge and stitch
+  normalize.py Samsung Health export fixes, segment splitting, per-file summary
+  validate.py  GPX 1.1 content model check, no schema library needed
   align.py     find where two recordings overlap by trajectory
   enrich.py    borrow sensor channels from a donor recording
   inspect.py   diagnostics

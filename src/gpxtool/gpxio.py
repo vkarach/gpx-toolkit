@@ -2,10 +2,12 @@
 
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from pathlib import Path
 
 NS = "http://www.topografix.com/GPX/1/1"
 TPX = "http://www.garmin.com/xmlschemas/TrackPointExtension/v1"
 SOURCE_TIME_ATTR = "srctime"
+TPX_ORDER = ["atemp", "wtemp", "depth", "hr", "cad"]
 
 ET.register_namespace("", NS)
 ET.register_namespace("gpxtpx", TPX)
@@ -47,7 +49,9 @@ def point_float(point: ET.Element, tag: str, default: float = 0.0) -> float:
 def set_point_float(point: ET.Element, tag: str, value: float, digits: int = 3) -> None:
     element = point.find(q(tag))
     if element is None:
-        element = ET.SubElement(point, q(tag))
+        element = ET.Element(q(tag))
+        extensions = point.find(q("extensions"))
+        point.insert(list(point).index(extensions) if extensions is not None else len(point), element)
     element.text = f"{value:.{digits}f}"
 
 
@@ -84,6 +88,11 @@ def extension_value(point: ET.Element, name: str) -> str | None:
     return element.text if element is not None else None
 
 
+def _tpx_rank(child: ET.Element) -> int:
+    name = child.tag.split("}")[-1]
+    return TPX_ORDER.index(name) if name in TPX_ORDER else len(TPX_ORDER)
+
+
 def set_extension_value(point: ET.Element, name: str, text: str) -> None:
     extensions = point.find(q("extensions"))
     if extensions is None:
@@ -94,6 +103,7 @@ def set_extension_value(point: ET.Element, name: str, text: str) -> None:
     element = container.find(tpx(name))
     if element is None:
         element = ET.SubElement(container, tpx(name))
+        container[:] = sorted(container, key=_tpx_rank)
     element.text = text
 
 
@@ -111,26 +121,85 @@ def extension_names(points: list[ET.Element]) -> list[str]:
     return names
 
 
-def read_segments(path: str) -> tuple[ET.Element, list[list[ET.Element]]]:
-    """Return the gpx root and every track segment as a list of points."""
-    root = ET.parse(path).getroot()
+def read_root(path: str) -> ET.Element:
+    return ET.parse(path).getroot()
+
+
+def segments_of(root: ET.Element) -> list[list[ET.Element]]:
     segments = []
     for track in root.findall(q("trk")):
         for segment in track.findall(q("trkseg")):
             points = segment.findall(q("trkpt"))
             if points:
                 segments.append(points)
-    return root, segments
+    return segments
 
 
-def write_gpx(root: ET.Element, segments: list[list[ET.Element]], path: str, creator: str) -> None:
+def read_segments(path: str) -> tuple[ET.Element, list[list[ET.Element]]]:
+    """Return the gpx root and every track segment as a list of points."""
+    root = read_root(path)
+    return root, segments_of(root)
+
+
+def track_name(root: ET.Element) -> str | None:
+    track = root.find(q("trk"))
+    if track is None:
+        return None
+    name = track.find(q("name"))
+    return name.text if name is not None else None
+
+
+def order_root(root: ET.Element) -> None:
+    """GPX 1.1 wants metadata first and extensions last; Samsung leaves them anywhere."""
+    rank = {"metadata": 0, "wpt": 1, "rte": 2, "trk": 3, "extensions": 4}
+    children = sorted(root, key=lambda child: rank.get(child.tag.split("}")[-1], 3))
+    for child in list(root):
+        root.remove(child)
+    root.extend(children)
+
+
+def build_gpx(root: ET.Element, segments: list[list[ET.Element]], creator: str) -> ET.Element:
+    """Rebuild the track from the given segments, leaving the rest of the file alone."""
+    name = track_name(root)
     for track in root.findall(q("trk")):
         root.remove(track)
     track = ET.SubElement(root, q("trk"))
+    if name:
+        ET.SubElement(track, q("name")).text = name
     for points in segments:
         segment = ET.SubElement(track, q("trkseg"))
         for point in points:
             segment.append(point)
     root.set("creator", creator)
+    order_root(root)
+    return root
+
+
+def write_root(root: ET.Element, path: str) -> None:
     ET.indent(root, space="    ")
     ET.ElementTree(root).write(path, xml_declaration=True, encoding="UTF-8")
+
+
+def write_gpx(root: ET.Element, segments: list[list[ET.Element]], path: str, creator: str) -> None:
+    write_root(build_gpx(root, segments, creator), path)
+
+
+def gpx_inputs(paths: list[str]) -> list[str]:
+    """Expand directories into the GPX files they hold, keeping the given order."""
+    found: list[str] = []
+    for entry in paths:
+        item = Path(entry)
+        if item.is_dir():
+            found.extend(str(child) for child in sorted(item.iterdir())
+                         if child.suffix.lower() == ".gpx")
+        else:
+            found.append(str(item))
+    if not found:
+        raise SystemExit(f"no GPX files in {', '.join(paths)}")
+    return found
+
+
+def refuse_in_place(inputs: list[str], output: str) -> None:
+    target = Path(output).resolve()
+    if any(Path(source).resolve() == target for source in inputs):
+        raise SystemExit(f"refusing to overwrite the input file: {output}")

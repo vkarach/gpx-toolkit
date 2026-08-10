@@ -1,11 +1,15 @@
 """Command line front end."""
 
 import argparse
+from pathlib import Path
 
-from .config import RepairConfig
+from .config import NormalizeConfig, RepairConfig
 from .enrich import enrich
+from .gpxio import gpx_inputs, refuse_in_place
 from .inspect import scan, tag_vs_distance
+from .normalize import MISSING_HR_MODES, normalize_file
 from .pipeline import merge_files
+from .validate import WARNING, grouped
 
 
 def _config_from_args(args: argparse.Namespace) -> RepairConfig:
@@ -24,7 +28,58 @@ def _add_tuning_flags(parser: argparse.ArgumentParser) -> None:
                             help=f"default {value}")
 
 
+def _outputs_for(inputs: list[str], output: str | None, out_dir: str | None,
+                 suffix: str) -> list[str]:
+    """One explicit output path, or one derived name per input inside a directory."""
+    if (output is None) == (out_dir is None):
+        raise SystemExit("pass either -o for a single file or --out-dir for a batch")
+    if output is not None:
+        if len(inputs) > 1:
+            raise SystemExit(f"-o takes one input, got {len(inputs)}; use --out-dir")
+        return [output]
+    directory = Path(out_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    return [str(directory / f"{Path(source).stem}{suffix}.gpx") for source in inputs]
+
+
+def cmd_normalize(args: argparse.Namespace) -> None:
+    config = NormalizeConfig(
+        gap_split_s=args.gap_split_s,
+        missing_hr=args.missing_hr,
+        speed_window_s=args.speed_window_s,
+        elevation_smooth=args.elevation_smooth,
+        derive_speed=not args.no_speed,
+    )
+    inputs = gpx_inputs(args.inputs)
+    outputs = _outputs_for(inputs, args.output, args.out_dir, "_normalized")
+
+    for source, target in zip(inputs, outputs):
+        refuse_in_place([source], target)
+        report = normalize_file(source, target, config)
+        summary = report.summary
+        print(f"{source} -> {target}")
+        print(f"  {summary.points} pts, {summary.duration_s:.0f}s, "
+              f"{summary.sample_rate_hz:.2f} Hz, "
+              f"{summary.duplicate_share:.0%} held positions, "
+              f"{summary.missing_hr} without hr")
+        if report.metadata_fixed:
+            print("  <metadate> rewritten as <metadata><time>")
+        if report.exerciseinfo_moved:
+            print("  <exerciseinfo> moved into <extensions>")
+        if report.hr_filled:
+            print(f"  {report.hr_filled} points forward-filled with the last hr")
+        if report.points_dropped:
+            print(f"  {report.points_dropped} trailing points without hr dropped")
+        for at, span in summary.gaps:
+            print(f"  gap at {at}: {span:.0f}s")
+        print(f"  {report.segments} segment(s) written")
+        for issue, count in grouped(report.issues):
+            if issue.level == WARNING:
+                print(f"  warning: {issue.message} ({count}x, first at {issue.where})")
+
+
 def cmd_merge(args: argparse.Namespace) -> None:
+    refuse_in_place(args.inputs, args.output)
     reports = merge_files(args.inputs, args.output, _config_from_args(args))
     print(args.output)
     for index, report in enumerate(reports):
@@ -50,6 +105,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
 
 def cmd_enrich(args: argparse.Namespace) -> None:
+    refuse_in_place([args.main, args.secondary], args.output)
     fields = [name.strip() for name in args.fields.split(",")] if args.fields else None
     report = enrich(args.main, args.secondary, args.output, fields, args.shift_s,
                     args.max_gap_s, args.max_shift_s, not args.no_require_alignment)
@@ -73,6 +129,7 @@ def cmd_enrich(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="gpxtool", description="Repair and merge GPS tracks")
     sub = parser.add_subparsers(dest="command", required=True)
+    defaults = NormalizeConfig()
 
     merge = sub.add_parser("merge", help="merge recordings into one repaired track")
     merge.add_argument("inputs", nargs="+")
@@ -92,6 +149,21 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--no-require-alignment", action="store_true",
                      help="enrich even when the trajectories do not match")
     add.set_defaults(func=cmd_enrich)
+
+    fix = sub.add_parser("normalize", help="repair a Samsung Health export into valid GPX 1.1")
+    fix.add_argument("inputs", nargs="+", help="GPX files or directories holding them")
+    fix.add_argument("-o", "--output", help="output path for a single input")
+    fix.add_argument("--out-dir", help="directory to write one file per input into")
+    fix.add_argument("--gap-split-s", type=float, default=defaults.gap_split_s,
+                     help=f"split into segments on longer pauses, default {defaults.gap_split_s}")
+    fix.add_argument("--missing-hr", choices=MISSING_HR_MODES, default=defaults.missing_hr,
+                     help=f"points without heart rate, default {defaults.missing_hr}")
+    fix.add_argument("--speed-window-s", type=float, default=defaults.speed_window_s,
+                     help=f"centred window for derived speed, default {defaults.speed_window_s}")
+    fix.add_argument("--elevation-smooth", type=int, default=defaults.elevation_smooth,
+                     help="points averaged either side of each elevation sample")
+    fix.add_argument("--no-speed", action="store_true", help="do not derive <speed>")
+    fix.set_defaults(func=cmd_normalize)
 
     check = sub.add_parser("scan", help="list duplicates, dropouts and impossible speed steps")
     check.add_argument("input")
